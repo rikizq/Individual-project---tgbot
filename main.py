@@ -4,10 +4,13 @@ import aiohttp
 
 from aiogram import Bot, Dispatcher
 from aiogram.filters import Command
-from aiogram.types import Message
+from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+from aiogram.exceptions import TelegramBadRequest
 
 
+# =========================
 # НАСТРОЙКИ
+# =========================
 
 TOKEN = "8205786674:AAF0JYnQBU7F6-hXQ0eqjYoJZyxAFhlxKsA"
 SEARCH_LIMIT = 5
@@ -18,8 +21,14 @@ dp = Dispatcher()
 
 session: aiohttp.ClientSession | None = None
 
+# кеш и сессии пользователей
+cache = {}
+user_sessions = {}
 
-# HTTP HELPER
+
+# =========================
+# HTTP
+# =========================
 
 async def fetch_json(url: str, params: dict | None = None):
     try:
@@ -39,99 +48,174 @@ async def fetch_json(url: str, params: dict | None = None):
         return None
 
 
+# =========================
 # ПОИСК
+# =========================
 
-async def search_music(query, limit=SEARCH_LIMIT):
+async def search_music(query: str, limit=SEARCH_LIMIT):
+    if query in cache:
+        return cache[query]
+
     url = "https://itunes.apple.com/search"
     params = {
         "term": query,
         "entity": "song",
         "limit": limit,
-        "country": "RU"
+        "country": "US"
     }
 
     data = await fetch_json(url, params)
     if not data:
         return []
 
-    results = data.get("results", [])
-    return [r for r in results if r.get("previewUrl")]
+    results = [r for r in data.get("results", []) if r.get("previewUrl")]
 
+    if len(cache) > 100:
+        cache.clear()
 
-async def search_by_artist(artist, limit=SEARCH_LIMIT):
-    return await search_music(artist, limit)
-
-
-async def search_by_track(track, limit=SEARCH_LIMIT):
-    return await search_music(track, limit)
+    cache[query] = results
+    return results
 
 
 async def get_random_tracks(limit=SEARCH_LIMIT):
-    terms = ["love", "pop", "rock", "dance", "rap", "hit"]
+    terms = ["billboard", "viral hits", "top charts", "trending music"]
     results = await search_music(random.choice(terms), limit=20)
 
-    if not results:
-        return []
-
-    return random.sample(results, min(limit, len(results)))
+    return random.sample(results, min(limit, len(results))) if results else []
 
 
 async def get_top_tracks(limit=SEARCH_LIMIT):
-    results = await search_music("top hits 2025", limit=20)
-
-    if not results:
-        return []
-
-    return results[:limit]
+    results = await search_music("billboard hot 100", limit=20)
+    return results[:limit] if results else []
 
 
-# ОТПРАВКА (БЕЗ СКАЧИВАНИЯ)
+# =========================
+# КНОПКИ ПАГИНАЦИИ
+# =========================
 
-async def send_preview(message: Message, track: dict):
-    url = track.get("previewUrl")
-    if not url:
+def get_pagination_keyboard(user_id: int, index: int, total: int):
+    buttons = []
+
+    if index > 0:
+        buttons.append(
+            InlineKeyboardButton(
+                text="⬅️",
+                callback_data=f"prev:{user_id}:{index}"
+            )
+        )
+
+    if index < total - 1:
+        buttons.append(
+            InlineKeyboardButton(
+                text="➡️",
+                callback_data=f"next:{user_id}:{index}"
+            )
+        )
+
+    return InlineKeyboardMarkup(inline_keyboard=[buttons])
+
+
+# =========================
+# ОТПРАВКА ТРЕКА
+# =========================
+
+async def send_track_page(message: Message, user_id: int, index: int):
+    session_data = user_sessions.get(user_id)
+    if not session_data:
         return
 
+    tracks = session_data["tracks"]
+
+    if index < 0 or index >= len(tracks):
+        return
+
+    track = tracks[index]
+
+    track_name = track.get("trackName", "Unknown")
+    artist_name = track.get("artistName", "Unknown")
+    preview_url = track.get("previewUrl")
+    artwork = track.get("artworkUrl100")
+
+    caption = f"{track_name}\n{artist_name}"
+
     try:
-        await message.answer_audio(
-            audio=url,  # <-- ВАЖНО: отправляем ссылку напрямую
-            title=track.get("trackName", "Unknown"),
-            performer=track.get("artistName", "Unknown"),
-            caption="🎵 Вот твой трек"
-        )
+        if artwork:
+            artwork = artwork.replace("100x100", "600x600")
+
+            await message.answer_photo(
+                photo=artwork,
+                caption=caption
+            )
+
+        if preview_url:
+            await message.answer_audio(
+                audio=preview_url,
+                caption="Preview",
+                reply_markup=get_pagination_keyboard(user_id, index, len(tracks))
+            )
+
+    except TelegramBadRequest:
+        print("Invalid media")
     except Exception as e:
-        print("Send preview error:", e)
+        print("Send error:", e)
 
 
-async def send_tracks_parallel(message: Message, tracks: list):
-    tasks = [send_preview(message, t) for t in tracks]
-    await asyncio.gather(*tasks)
+# =========================
+# CALLBACK ПАГИНАЦИИ
+# =========================
+
+@dp.callback_query()
+async def pagination_handler(callback: CallbackQuery):
+    try:
+        action, user_id, index = callback.data.split(":")
+        user_id = int(user_id)
+        index = int(index)
+
+        if callback.from_user.id != user_id:
+            await callback.answer("Это не ваши кнопки (Not your buttons)", show_alert=True)
+            return
+
+        if action == "next":
+            index += 1
+        elif action == "prev":
+            index -= 1
+
+        session_data = user_sessions.get(user_id)
+        if not session_data:
+            return
+
+        tracks = session_data["tracks"]
+
+        if index < 0 or index >= len(tracks):
+            return
+
+        try:
+            await callback.message.delete()
+        except:
+            pass
+
+        await send_track_page(callback.message, user_id, index)
+        await callback.answer()
+
+    except Exception as e:
+        print("Pagination error:", e)
 
 
-# КОМАНДЫ 
+# =========================
+# КОМАНДЫ
+# =========================
+
 @dp.message(Command("start"))
 async def start(message: Message):
     await message.answer(
-        "🎵 Привет!\n\n"
-        "Напиши название трека или исполнителя.\n\n"
-        "Команды:\n"
-        "/track <название>\n"
-        "/artist <имя>\n"
-        "/random\n"
-        "/top\n"
-        "/help"
-    )
-
-
-@dp.message(Command("help"))
-async def help_cmd(message: Message):
-    await message.answer(
-        " Команды:\n\n"
-        "/track <название>\n"
-        "/artist <имя>\n"
-        "/random\n"
-        "/top\n\n"
-        "Можно просто написать текст для поиска."
+        "Музыкальный бот (Music Bot)\n\n"
+        "Отправь название трека или исполнителя\n"
+        "(Send track or artist name)\n\n"
+        "Команды (Commands):\n"
+        "/track — поиск трека (search track)\n"
+        "/artist — поиск исполнителя (search artist)\n"
+        "/random — случайные треки (random tracks)\n"
+        "/top — топ треков (top tracks)"
     )
 
 
@@ -139,78 +223,96 @@ async def help_cmd(message: Message):
 async def track_cmd(message: Message):
     args = message.text.split(maxsplit=1)
     if len(args) < 2:
-        await message.answer("Укажи название после /track")
+        await message.answer("Введите название трека (Enter track name)")
         return
 
-    tracks = await search_by_track(args[1])
+    tracks = await search_music(args[1])
+
     if not tracks:
-        await message.answer("Ничего не найдено")
+        await message.answer("Ничего не найдено (Nothing found)")
         return
 
-    await send_tracks_parallel(message, tracks)
+    user_sessions[message.from_user.id] = {"tracks": tracks}
+    await send_track_page(message, message.from_user.id, 0)
 
 
 @dp.message(Command("artist"))
 async def artist_cmd(message: Message):
     args = message.text.split(maxsplit=1)
     if len(args) < 2:
-        await message.answer("Укажи исполнителя после /artist")
+        await message.answer("Введите имя исполнителя (Enter artist name)")
         return
 
-    tracks = await search_by_artist(args[1])
+    tracks = await search_music(args[1])
+
     if not tracks:
-        await message.answer("Исполнитель не найден")
+        await message.answer("Ничего не найдено (Nothing found)")
         return
 
-    await send_tracks_parallel(message, tracks)
+    user_sessions[message.from_user.id] = {"tracks": tracks}
+    await send_track_page(message, message.from_user.id, 0)
 
 
 @dp.message(Command("random"))
 async def random_cmd(message: Message):
     tracks = await get_random_tracks()
+
     if not tracks:
-        await message.answer("Не удалось найти треки")
+        await message.answer("Ошибка загрузки треков (Error loading tracks)")
         return
 
-    await send_tracks_parallel(message, tracks)
+    user_sessions[message.from_user.id] = {"tracks": tracks}
+    await send_track_page(message, message.from_user.id, 0)
 
 
 @dp.message(Command("top"))
 async def top_cmd(message: Message):
     tracks = await get_top_tracks()
+
     if not tracks:
-        await message.answer("Топ временно недоступен")
+        await message.answer("Топ временно недоступен (Top unavailable)")
         return
 
-    await send_tracks_parallel(message, tracks)
+    user_sessions[message.from_user.id] = {"tracks": tracks}
+    await send_track_page(message, message.from_user.id, 0)
 
 
 @dp.message()
 async def text_search(message: Message):
+    if not message.text:
+        return
+
     query = message.text.strip()
-    if not query:
+
+    if query.startswith('/'):
         return
 
     tracks = await search_music(query)
+
     if not tracks:
-        await message.answer("Ничего не найдено")
+        await message.answer("Ничего не найдено (Nothing found)")
         return
 
-    await send_tracks_parallel(message, tracks)
+    user_sessions[message.from_user.id] = {"tracks": tracks}
+    await send_track_page(message, message.from_user.id, 0)
 
 
-# ЗАПУСК 
+# =========================
+# ЗАПУСК
+# =========================
 
 async def main():
     global session
     session = aiohttp.ClientSession()
 
-    print(" Музыкальный бот запущен ")
+    print("Bot started")
 
     try:
+        await bot.delete_webhook(drop_pending_updates=True)
         await dp.start_polling(bot)
     finally:
         await session.close()
+        await bot.session.close()
 
 
 if __name__ == "__main__":
