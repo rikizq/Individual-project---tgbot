@@ -212,10 +212,10 @@ async def start(message: Message):
         "Отправь название трека или исполнителя\n"
         "(Send track or artist name)\n\n"
         "Команды (Commands):\n"
-        "/track — поиск трека (search track)\n"
-        "/artist — поиск исполнителя (search artist)\n"
-        "/random — случайные треки (random tracks)\n"
-        "/top — топ треков (top tracks)"
+        "/track - поиск трека (search track)\n"
+        "/artist - поиск исполнителя (search artist)\n"
+        "/random - случайные треки (random tracks)\n"
+        "/top - топ треков (top tracks)"
     )
 
 
