@@ -8,9 +8,7 @@ from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, C
 from aiogram.exceptions import TelegramBadRequest
 
 
-# =========================
 # НАСТРОЙКИ
-# =========================
 
 TOKEN = "8205786674:AAF0JYnQBU7F6-hXQ0eqjYoJZyxAFhlxKsA"
 SEARCH_LIMIT = 5
@@ -26,9 +24,7 @@ cache = {}
 user_sessions = {}
 
 
-# =========================
 # HTTP
-# =========================
 
 async def fetch_json(url: str, params: dict | None = None):
     try:
@@ -48,9 +44,7 @@ async def fetch_json(url: str, params: dict | None = None):
         return None
 
 
-# =========================
 # ПОИСК
-# =========================
 
 async def search_music(query: str, limit=SEARCH_LIMIT):
     if query in cache:
@@ -89,9 +83,7 @@ async def get_top_tracks(limit=SEARCH_LIMIT):
     return results[:limit] if results else []
 
 
-# =========================
 # КНОПКИ ПАГИНАЦИИ
-# =========================
 
 def get_pagination_keyboard(user_id: int, index: int, total: int):
     buttons = []
@@ -115,9 +107,7 @@ def get_pagination_keyboard(user_id: int, index: int, total: int):
     return InlineKeyboardMarkup(inline_keyboard=[buttons])
 
 
-# =========================
 # ОТПРАВКА ТРЕКА
-# =========================
 
 async def send_track_page(message: Message, user_id: int, index: int):
     session_data = user_sessions.get(user_id)
@@ -160,9 +150,7 @@ async def send_track_page(message: Message, user_id: int, index: int):
         print("Send error:", e)
 
 
-# =========================
 # CALLBACK ПАГИНАЦИИ
-# =========================
 
 @dp.callback_query()
 async def pagination_handler(callback: CallbackQuery):
@@ -201,9 +189,7 @@ async def pagination_handler(callback: CallbackQuery):
         print("Pagination error:", e)
 
 
-# =========================
 # КОМАНДЫ
-# =========================
 
 @dp.message(Command("start"))
 async def start(message: Message):
@@ -212,10 +198,10 @@ async def start(message: Message):
         "Отправь название трека или исполнителя\n"
         "(Send track or artist name)\n\n"
         "Команды (Commands):\n"
-        "/track — поиск трека (search track)\n"
-        "/artist — поиск исполнителя (search artist)\n"
-        "/random — случайные треки (random tracks)\n"
-        "/top — топ треков (top tracks)"
+        "/track - поиск трека (search track)\n"
+        "/artist - поиск исполнителя (search artist)\n"
+        "/random - случайные треки (random tracks)\n"
+        "/top - топ треков (top tracks)"
     )
 
 
@@ -297,9 +283,7 @@ async def text_search(message: Message):
     await send_track_page(message, message.from_user.id, 0)
 
 
-# =========================
 # ЗАПУСК
-# =========================
 
 async def main():
     global session
